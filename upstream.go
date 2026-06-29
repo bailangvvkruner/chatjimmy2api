@@ -55,6 +55,12 @@ func findStats(data []byte) int {
 
 // ── Upstream client ──
 
+const (
+	// maxRequestBodySize is the approximate max request body size in bytes
+	// before we truncate messages. The upstream nginx limits client_max_body_size.
+	maxRequestBodySize = 384 * 1024 // 384KB safe limit
+)
+
 type UpstreamClient struct {
 	baseURL    string
 	httpClient *http.Client
@@ -100,6 +106,15 @@ func (c *UpstreamClient) BuildJimmyRequest(req *ChatCompletionRequest) *JimmyReq
 		}
 	}
 
+	// Truncate messages if the total body exceeds the upstream limit
+	maxSize := maxRequestBodySize
+	if maxSize > 0 {
+		truncated := truncateMessages(messages, maxSize, 2048) // 2KB overhead buffer
+		if len(truncated) < len(messages) {
+			messages = truncated
+		}
+	}
+
 	model := req.Model
 	if model == "" {
 		model = "llama3.1-8B"
@@ -129,6 +144,15 @@ func (c *UpstreamClient) BuildJimmyRequestFromMessages(messages []ChatMessage, m
 			systemPrompt += msg.contentString()
 		} else {
 			chatMsgs = append(chatMsgs, msg)
+		}
+	}
+
+	// Truncate messages if the total body exceeds the upstream limit
+	maxSize := maxRequestBodySize
+	if maxSize > 0 {
+		truncated := truncateMessages(chatMsgs, maxSize, 2048)
+		if len(truncated) < len(chatMsgs) {
+			chatMsgs = truncated
 		}
 	}
 
@@ -279,4 +303,47 @@ func copyBuf(src []byte) []byte {
 	dst := make([]byte, len(src))
 	copy(dst, src)
 	return dst
+}
+
+// truncateMessages removes older messages until the estimated JSON body size
+// is under maxSize. It always keeps the first and last message.
+// overhead is extra bytes for JSON framing, system prompt, etc.
+func truncateMessages(msgs []ChatMessage, maxSize int, overhead int) []ChatMessage {
+	if len(msgs) <= 2 {
+		return msgs
+	}
+	estimate := estimateBodySize(msgs)
+	if estimate+overhead <= maxSize {
+		return msgs
+	}
+	// Drop from the middle (index 1), keep first and last
+	droppable := len(msgs) - 2 // messages we can drop (not first, not last)
+	toDrop := 1
+	for estimate+overhead > maxSize && droppable > 0 {
+		idx := 1 + (toDrop-1)%droppable
+		msgs = append(msgs[:idx], msgs[idx+1:]...)
+		droppable--
+		estimate = estimateBodySize(msgs)
+	}
+	return msgs
+}
+
+// estimateBodySize estimates the JSON body size of a []ChatMessage in bytes.
+func estimateBodySize(msgs []ChatMessage) int {
+	size := 2 // [...]
+	for _, m := range msgs {
+		size += 20 // {"role":"x","content":"..."}, commas, etc.
+		size += len(m.Role)
+		size += len(m.Content)
+		if len(m.Name) > 0 {
+			size += 10 + len(m.Name) // "name":"..."
+		}
+		if len(m.ToolCalls) > 0 {
+			size += 50 // rough tool call overhead
+		}
+		if m.ToolCallID != "" {
+			size += 20 + len(m.ToolCallID) // "tool_call_id":"..."
+		}
+	}
+	return size
 }

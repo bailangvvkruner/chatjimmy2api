@@ -271,6 +271,11 @@ func (s *Server) nonStreamChatCompletion(w http.ResponseWriter, r *http.Request,
 		usage.TotalTokens = stats.TotalTokens
 	}
 
+	// Debug: log when content might be empty
+	if rawContent == "" {
+		log.Printf("[DEBUG] empty rawContent for chat %s, model=%s, stats=%+v", chatID, model, stats)
+	}
+
 	// Check for tool calls
 	if hasTools && HasToolCalls(rawContent) {
 		if parsed := FindToolCalls(rawContent); len(parsed) > 0 {
