@@ -288,10 +288,13 @@ func (s *Server) nonStreamChatCompletion(w http.ResponseWriter, r *http.Request,
 	chatID := generateID()
 	created := nowUnix()
 
-	// Extract token stats
+	// Extract token stats from upstream <|stats|> tag
 	stats := sr.ExtractStats()
-	usage := Usage{TotalTokens: 0}
+	usage := Usage{}
 	if stats != nil {
+		// DecodeTokens = output tokens, TotalTokens - DecodeTokens = input tokens
+		usage.CompletionTokens = stats.DecodeTokens
+		usage.PromptTokens = stats.TotalTokens - stats.DecodeTokens
 		usage.TotalTokens = stats.TotalTokens
 	}
 
@@ -331,7 +334,6 @@ func (s *Server) nonStreamChatCompletion(w http.ResponseWriter, r *http.Request,
 	statsText := formatStats(start, int64(len(rawContent)))
 	if statsText != "" {
 		rawContent += "\n\n" + statsText
-		usage.TotalTokens += 1 // approximate
 	}
 	resp := ChatCompletionResponse{
 		ID: chatID, Object: "chat.completion", Created: created, Model: model,
