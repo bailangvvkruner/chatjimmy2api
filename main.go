@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -34,9 +35,21 @@ func main() {
 	upstreamURL := getEnv("UPSTREAM_URL", defaultUpstream)
 	apiKey := getEnv("API_KEY", defaultAPIKey)
 
+	// ── Parse model list (comma-separated, from env or default) ──
+	modelsEnv := os.Getenv("UPSTREAM_MODELS")
+	var modelIDs []string
+	if modelsEnv != "" {
+		modelIDs = strings.Split(modelsEnv, ",")
+		for i := range modelIDs {
+			modelIDs[i] = strings.TrimSpace(modelIDs[i])
+		}
+	} else {
+		modelIDs = DefaultChatJimmyModels
+	}
+
 	// ── Initialize dependencies ──
 	client := NewUpstreamClient(upstreamURL)
-	server := NewServer(client, apiKey)
+	server := NewServer(client, apiKey, modelIDs)
 
 	// ── HTTP server ──
 	srv := &http.Server{

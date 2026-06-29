@@ -147,6 +147,21 @@ type ToolCallDeltaFunc struct {
 
 // ── chatjimmy.ai request types ──
 
+var DefaultChatJimmyModels = []string{
+	"llama3.1-8B",
+	"llama3.1-70B",
+	"gpt-4o",
+	"gpt-4o-mini",
+	"claude-3.5-haiku",
+	"qwen2.5-7B",
+	"qwen2.5-72B",
+	"deepseek-v3",
+	"deepseek-r1",
+	"gemini-2.0-flash",
+	"gemini-2.5-pro",
+	"mistral-large",
+}
+
 type JimmyRequest struct {
 	Messages    []ChatMessage `json:"messages"`
 	ChatOptions JimmyOptions  `json:"chatOptions"`

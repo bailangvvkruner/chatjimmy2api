@@ -14,13 +14,24 @@ type Server struct {
 	upstream *UpstreamClient
 	apiKey   string
 	started  time.Time
+	models   []Model
 }
 
-func NewServer(upstream *UpstreamClient, apiKey string) *Server {
+func NewServer(upstream *UpstreamClient, apiKey string, modelIDs []string) *Server {
+	models := make([]Model, len(modelIDs))
+	for i, id := range modelIDs {
+		models[i] = Model{
+			ID:      id,
+			Object:  "model",
+			Created: 1700000000,
+			OwnedBy: "chatjimmy",
+		}
+	}
 	return &Server{
 		upstream: upstream,
 		apiKey:   apiKey,
 		started:  time.Now(),
+		models:   models,
 	}
 }
 
@@ -95,14 +106,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ModelsResponse{
 		Object: "list",
-		Data: []Model{
-			{
-				ID:      "llama3.1-8B",
-				Object:  "model",
-				Created: 1700000000,
-				OwnedBy: "chatjimmy",
-			},
-		},
+		Data:   s.models,
 	})
 }
 
