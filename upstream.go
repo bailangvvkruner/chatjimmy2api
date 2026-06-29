@@ -93,6 +93,8 @@ func NewUpstreamClient(baseURL string) *UpstreamClient {
 }
 
 // BuildJimmyRequest converts an OpenAI-format request into a chatjimmy.ai request.
+// All message content is normalized to plain text strings since the upstream
+// chatjimmy.ai does not support content arrays (multi-modal format).
 func (c *UpstreamClient) BuildJimmyRequest(req *ChatCompletionRequest) *JimmyRequest {
 	var systemPrompt string
 	messages := make([]ChatMessage, 0, len(req.Messages))
@@ -104,6 +106,9 @@ func (c *UpstreamClient) BuildJimmyRequest(req *ChatCompletionRequest) *JimmyReq
 			}
 			systemPrompt += msg.contentString()
 		} else {
+			// Normalize content: convert content arrays to plain text
+			contentStr := msg.contentString()
+			msg.Content = contentPtr(contentStr)
 			messages = append(messages, msg)
 		}
 	}
@@ -137,6 +142,8 @@ func (c *UpstreamClient) BuildJimmyRequest(req *ChatCompletionRequest) *JimmyReq
 }
 
 // BuildJimmyRequestFromMessages builds a JimmyRequest from pre-processed messages.
+// All message content is normalized to plain text strings since the upstream
+// chatjimmy.ai does not support content arrays (multi-modal format).
 func (c *UpstreamClient) BuildJimmyRequestFromMessages(messages []ChatMessage, model string) *JimmyRequest {
 	var systemPrompt string
 	chatMsgs := make([]ChatMessage, 0, len(messages))
@@ -148,6 +155,9 @@ func (c *UpstreamClient) BuildJimmyRequestFromMessages(messages []ChatMessage, m
 			}
 			systemPrompt += msg.contentString()
 		} else {
+			// Normalize content: convert content arrays to plain text
+			contentStr := msg.contentString()
+			msg.Content = contentPtr(contentStr)
 			chatMsgs = append(chatMsgs, msg)
 		}
 	}
