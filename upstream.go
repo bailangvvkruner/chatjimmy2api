@@ -112,8 +112,10 @@ func (c *UpstreamClient) BuildJimmyRequest(req *ChatCompletionRequest) *JimmyReq
 	maxSize := maxRequestBodySize
 	if maxSize > 0 {
 		overhead := 512 + len(systemPrompt)
+		estimate := estimateBodySize(messages)
 		truncated := truncateMessages(messages, maxSize, overhead)
 		if len(truncated) < len(messages) {
+			logDebug("truncated msgs=%d→%d estimate=%d overhead=%d max=%d", len(messages), len(truncated), estimate, overhead, maxSize)
 			messages = truncated
 		}
 	}
@@ -154,8 +156,10 @@ func (c *UpstreamClient) BuildJimmyRequestFromMessages(messages []ChatMessage, m
 	maxSize := maxRequestBodySize
 	if maxSize > 0 {
 		overhead := 512 + len(systemPrompt)
+		estimate := estimateBodySize(chatMsgs)
 		truncated := truncateMessages(chatMsgs, maxSize, overhead)
 		if len(truncated) < len(chatMsgs) {
+			logDebug("truncated msgs=%d→%d estimate=%d overhead=%d max=%d", len(chatMsgs), len(truncated), estimate, overhead, maxSize)
 			chatMsgs = truncated
 		}
 	}
@@ -182,6 +186,8 @@ func (c *UpstreamClient) DoRequest(ctx context.Context, jimmyReq *JimmyRequest) 
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
+
+	logDebug("upstream body_size=%d msgs=%d sysprompt_len=%d body_preview=%q", len(body), len(jimmyReq.Messages), len(jimmyReq.ChatOptions.SystemPrompt), string(body[:min(len(body), 120)]))
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL, bytes.NewReader(body))
 	if err != nil {
