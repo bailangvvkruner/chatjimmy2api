@@ -94,7 +94,7 @@ func (c *UpstreamClient) BuildJimmyRequest(req *ChatCompletionRequest) *JimmyReq
 			if systemPrompt != "" {
 				systemPrompt += "\n"
 			}
-			systemPrompt += safeStr(msg.Content)
+			systemPrompt += msg.contentString()
 		} else {
 			messages = append(messages, msg)
 		}
@@ -126,7 +126,7 @@ func (c *UpstreamClient) BuildJimmyRequestFromMessages(messages []ChatMessage, m
 			if systemPrompt != "" {
 				systemPrompt += "\n"
 			}
-			systemPrompt += safeStr(msg.Content)
+			systemPrompt += msg.contentString()
 		} else {
 			chatMsgs = append(chatMsgs, msg)
 		}

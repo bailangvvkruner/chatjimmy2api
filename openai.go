@@ -6,6 +6,7 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -24,11 +25,43 @@ type ChatCompletionRequest struct {
 }
 
 type ChatMessage struct {
-	Role       string     `json:"role"`
-	Content    *string    `json:"content"` // nil → null in JSON (for tool calls)
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	Name      string     `json:"name,omitempty"` // for role:tool
+	Role       string          `json:"role"`
+	Content    json.RawMessage `json:"content"` // string, array-of-parts, or null
+	ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
+	ToolCallID string          `json:"tool_call_id,omitempty"`
+	Name       string          `json:"name,omitempty"` // for role:tool
+}
+
+// contentString extracts the plain text from a message's content field,
+// handling both "string" and array-of-content-parts formats.
+func (m *ChatMessage) contentString() string {
+	if len(m.Content) == 0 || string(m.Content) == "null" {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(m.Content, &s); err == nil {
+		return s
+	}
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(m.Content, &parts); err == nil {
+		var texts []string
+		for _, p := range parts {
+			if p.Type == "text" {
+				texts = append(texts, p.Text)
+			}
+		}
+		return strings.Join(texts, "\n")
+	}
+	return ""
+}
+
+// contentPtr creates a json.RawMessage from a plain string.
+func contentPtr(s string) json.RawMessage {
+	b, _ := json.Marshal(s)
+	return b
 }
 
 // ── Tool definition (in request) ──
@@ -153,13 +186,6 @@ type Model struct {
 // ── String pointer helper ──
 
 func strPtr(s string) *string { return &s }
-
-func safeStr(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
 
 // ── JSON/SSE helpers ──
 

@@ -177,13 +177,13 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 func injectSystemMessage(msgs []ChatMessage, content string) []ChatMessage {
 	for i, m := range msgs {
 		if m.Role == "system" {
-			existing := safeStr(m.Content)
-			msgs[i].Content = strPtr(existing + "\n\n" + content)
+			existing := m.contentString()
+			msgs[i].Content = contentPtr(existing + "\n\n" + content)
 			return msgs
 		}
 	}
 	result := make([]ChatMessage, 0, len(msgs)+1)
-	result = append(result, ChatMessage{Role: "system", Content: strPtr(content)})
+	result = append(result, ChatMessage{Role: "system", Content: contentPtr(content)})
 	result = append(result, msgs...)
 	return result
 }
@@ -198,11 +198,11 @@ func withToolResultsFormatted(msgs []ChatMessage) []ChatMessage {
 		switch {
 		case m.Role == "tool":
 			result[i].Role = "user"
-			format := fmt.Sprintf("[tool result for call %s]:\n%s", m.ToolCallID, safeStr(m.Content))
+			format := fmt.Sprintf("[tool result for call %s]:\n%s", m.ToolCallID, m.contentString())
 			if m.Name != "" {
-				format = fmt.Sprintf("[tool result for %q (call %s)]:\n%s", m.Name, m.ToolCallID, safeStr(m.Content))
+				format = fmt.Sprintf("[tool result for %q (call %s)]:\n%s", m.Name, m.ToolCallID, m.contentString())
 			}
-			result[i].Content = strPtr(format)
+			result[i].Content = contentPtr(format)
 			result[i].ToolCallID = ""
 
 		case m.Role == "assistant" && len(m.ToolCalls) > 0:
@@ -211,7 +211,7 @@ func withToolResultsFormatted(msgs []ChatMessage) []ChatMessage {
 				parts = append(parts, fmt.Sprintf("%s{\"name\":%q,\"arguments\":%s}%s",
 					toolCallBegin, tc.Function.Name, tc.Function.Arguments, toolCallEnd))
 			}
-			result[i].Content = strPtr(strings.Join(parts, "\n"))
+			result[i].Content = contentPtr(strings.Join(parts, "\n"))
 			result[i].ToolCalls = nil
 		}
 	}
@@ -298,7 +298,7 @@ func (s *Server) nonStreamChatCompletion(w http.ResponseWriter, r *http.Request,
 			Index: 0,
 			Message: ChatMessage{
 				Role:    "assistant",
-				Content: strPtr(rawContent),
+				Content: contentPtr(rawContent),
 			},
 			FinishReason: &finish,
 		}},
