@@ -124,6 +124,7 @@ func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	var req ChatCompletionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		logDebug("req decode error: %v", err)
 		writeJSON(w, http.StatusBadRequest, APIError{
 			Error: APIErrorDetail{
 				Message: fmt.Sprintf("Invalid JSON: %v", err),
@@ -134,6 +135,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(req.Messages) == 0 {
+		logDebug("req no messages")
 		writeJSON(w, http.StatusBadRequest, APIError{
 			Error: APIErrorDetail{
 				Message: "messages is required",
@@ -148,27 +150,34 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		model = "llama3.1-8B"
 	}
 
+	logDebug("req model=%s msgs=%d stream=%v tools=%d", model, len(req.Messages), req.Stream, len(req.Tools))
+	for i, m := range req.Messages {
+		cStr := m.contentString()
+		preview := cStr
+		if len(preview) > 60 {
+			preview = preview[:60] + "..."
+		}
+		logDebug("  msg[%d] role=%s content_len=%d preview=%q", i, m.Role, len(m.Content), preview)
+	}
+
 	messages := req.Messages
 
 	// ── Tool handling ──
-	// hasTools controls whether we parse tool calls from the response.
-	// tool_choice="none" disables tool calling even if tools are provided.
 	hasTools := len(req.Tools) > 0
 	if hasTools {
 		if choice, ok := req.ToolChoice.(string); ok && choice == "none" {
 			hasTools = false
 		}
-		// Always inject tool prompt (it handles tool_choice internally)
 		if toolPrompt := BuildToolSystemPrompt(req.Tools, req.ToolChoice); toolPrompt != "" {
 			messages = injectSystemMessage(messages, toolPrompt)
 		}
 	}
-	// ─────────────────
 
-	// Build upstream request
 	jimmyReq := s.upstream.BuildJimmyRequestFromMessages(
 		withToolResultsFormatted(messages), model,
 	)
+
+	logDebug("upstream req model=%s msgs=%d sysprompt_len=%d", jimmyReq.ChatOptions.SelectedModel, len(jimmyReq.Messages), len(jimmyReq.ChatOptions.SystemPrompt))
 
 	if req.Stream {
 		s.streamChatCompletion(w, r, jimmyReq, model, hasTools)
@@ -271,10 +280,7 @@ func (s *Server) nonStreamChatCompletion(w http.ResponseWriter, r *http.Request,
 		usage.TotalTokens = stats.TotalTokens
 	}
 
-	// Debug: log when content might be empty
-	if rawContent == "" {
-		log.Printf("[DEBUG] empty rawContent for chat %s, model=%s, stats=%+v", chatID, model, stats)
-	}
+	logDebug("upstream raw: chat=%s len=%d has_stats=%v", chatID, len(rawContent), stats != nil)
 
 	// Check for tool calls
 	if hasTools && HasToolCalls(rawContent) {
@@ -294,6 +300,7 @@ func (s *Server) nonStreamChatCompletion(w http.ResponseWriter, r *http.Request,
 				}},
 				Usage: usage,
 			}
+			logDebug("resp tool_calls chat=%s finish=tool_calls n=%d", chatID, len(toolCalls))
 			writeJSON(w, http.StatusOK, resp)
 			return
 		}
@@ -317,7 +324,7 @@ func (s *Server) nonStreamChatCompletion(w http.ResponseWriter, r *http.Request,
 		}},
 		Usage: usage,
 	}
-	logDebug("response chat=%s rawContent=%q", chatID, rawContent)
+	logDebug("resp text chat=%s finish=stop content_len=%d preview=%q usage=%+v", chatID, len(rawContent), rawContent[:min(len(rawContent), 60)], usage)
 	writeJSON(w, http.StatusOK, resp)
 }
 
