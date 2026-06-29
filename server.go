@@ -16,11 +16,15 @@ type Server struct {
 	started  time.Time
 	models   []Model
 
-	lastUsageMu sync.Mutex
-	lastModel   string
-	lastPrompt  int
+	mu             sync.Mutex
+	lastModel      string
+	lastPrompt     int
 	lastCompletion int
-	lastTotal   int
+	lastTotal      int
+	totalReqs      int64
+	totalPrompt    int64
+	totalCompletion int64
+	totalTokens    int64
 }
 
 func NewServer(upstream *UpstreamClient, apiKey string, modelIDs []string) *Server {
@@ -105,26 +109,40 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // ── Handlers ──
 
 func (s *Server) storeLastUsage(model string, prompt, completion, total int) {
-	s.lastUsageMu.Lock()
+	s.mu.Lock()
 	s.lastModel = model
 	s.lastPrompt = prompt
 	s.lastCompletion = completion
 	s.lastTotal = total
-	s.lastUsageMu.Unlock()
+	s.totalReqs++
+	s.totalPrompt += int64(prompt)
+	s.totalCompletion += int64(completion)
+	s.totalTokens += int64(total)
+	s.mu.Unlock()
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	s.lastUsageMu.Lock()
+	s.mu.Lock()
 	lm := s.lastModel
 	lp := s.lastPrompt
 	lc := s.lastCompletion
 	lt := s.lastTotal
-	s.lastUsageMu.Unlock()
+	tr := s.totalReqs
+	tp := s.totalPrompt
+	tc := s.totalCompletion
+	tt := s.totalTokens
+	s.mu.Unlock()
 
 	resp := map[string]any{
 		"status":  "ok",
 		"uptime":  time.Since(s.started).String(),
 		"version": "0.1.0",
+		"total_requests": tr,
+		"total_tokens": map[string]int64{
+			"prompt":    tp,
+			"completion": tc,
+			"total":     tt,
+		},
 	}
 	if lm != "" {
 		resp["last_usage"] = map[string]any{
