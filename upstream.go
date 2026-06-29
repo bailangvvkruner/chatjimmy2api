@@ -204,9 +204,10 @@ func (c *UpstreamClient) DoRequest(ctx context.Context, jimmyReq *JimmyRequest) 
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
+	// Randomize all fingerprintable headers (UA, IP headers, accept-language,
+	// sec-ch-ua, etc.) so each request looks like a different browser/client.
+	setRandomHeaders(req)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "*/*")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
 	req.Header.Set("Origin", "https://chatjimmy.ai")
 	req.Header.Set("Referer", "https://chatjimmy.ai/")
 

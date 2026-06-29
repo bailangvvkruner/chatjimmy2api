@@ -248,6 +248,7 @@ func withToolResultsFormatted(msgs []ChatMessage) []ChatMessage {
 
 func (s *Server) nonStreamChatCompletion(w http.ResponseWriter, r *http.Request, jimmyReq *JimmyRequest, model string, hasTools bool) {
 	logDebug("nonstream calling DoRequest model=%s msgs=%d", model, len(jimmyReq.Messages))
+	start := time.Now()
 	body, err := s.upstream.DoRequest(r.Context(), jimmyReq)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, APIError{
@@ -326,6 +327,12 @@ func (s *Server) nonStreamChatCompletion(w http.ResponseWriter, r *http.Request,
 		logWarn("empty rawContent, chat=%s model=%s stats=%+v", chatID, model, stats)
 		rawContent = "..."
 	}
+	// Append stats to the visible content
+	statsText := formatStats(start, int64(len(rawContent)))
+	if statsText != "" {
+		rawContent += "\n\n" + statsText
+		usage.TotalTokens += 1 // approximate
+	}
 	resp := ChatCompletionResponse{
 		ID: chatID, Object: "chat.completion", Created: created, Model: model,
 		Choices: []Choice{{
@@ -364,6 +371,26 @@ func sniffEmptyBody(sr *StreamReader) (*bytes.Buffer, error) {
 		buf.Write(chunk)
 	}
 	return buf, nil
+}
+
+// formatStats generates a human-readable stats string like "Generated in 1.23s • 456 tok/s".
+func formatStats(start time.Time, totalBytes int64) string {
+	elapsed := time.Since(start)
+	secs := elapsed.Seconds()
+	if secs < 0.001 {
+		return ""
+	}
+	var tps int64
+	if secs > 0 {
+		tps = int64(float64(totalBytes) / secs / 4.0)
+	}
+	var elapsedStr string
+	if secs >= 1.0 {
+		elapsedStr = fmt.Sprintf("%.2fs", secs)
+	} else {
+		elapsedStr = fmt.Sprintf("%dms", elapsed.Milliseconds())
+	}
+	return fmt.Sprintf("Generated in %s • %s tok/s", elapsedStr, formatInt(tps))
 }
 
 func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, jimmyReq *JimmyRequest, model string, hasTools bool) {
@@ -559,14 +586,21 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 		}
 	}
 
-	// Finish
+	// Finish: append stats as final content chunk
+	statsText := formatStats(streamStart, totalBytes)
+	if statsText != "" {
+		writeSSE(w, ChatCompletionChunk{
+			ID: chatID, Object: "chat.completion.chunk", Created: created, Model: model,
+			Choices: []ChunkChoice{{Delta: Delta{Content: strPtr("\n\n" + statsText)}}},
+		})
+		flusher.Flush()
+	}
 	finish := "stop"
 	writeSSE(w, ChatCompletionChunk{
 		ID: chatID, Object: "chat.completion.chunk", Created: created, Model: model,
 		Choices: []ChunkChoice{{Delta: Delta{}, FinishReason: &finish}},
 	})
 	fmt.Fprintf(w, "data: [DONE]\n\n")
-	writeStatsSSE(w, streamStart, totalBytes)
 	flusher.Flush()
 
 	logDebug("stream done text chat=%s total_bytes=%d elapsed=%v stats=%s", chatID, totalBytes, time.Since(streamStart), sr.StatsJSON())
