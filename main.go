@@ -18,6 +18,18 @@ const (
 	defaultUpstream  = "https://chatjimmy.ai/api/chat"
 )
 
+var debugMode bool
+
+func init() {
+	debugMode = os.Getenv("LOG_LEVEL") == "debug"
+}
+
+func logDebug(format string, args ...any) {
+	if debugMode {
+		log.Printf("[DEBUG] "+format, args...)
+	}
+}
+
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v

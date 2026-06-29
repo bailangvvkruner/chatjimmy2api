@@ -301,6 +301,10 @@ func (s *Server) nonStreamChatCompletion(w http.ResponseWriter, r *http.Request,
 
 	// Normal text response
 	finish := "stop"
+	if rawContent == "" {
+		log.Printf("[WARN] empty rawContent, chat=%s model=%s stats=%+v", chatID, model, stats)
+		rawContent = "..."
+	}
 	resp := ChatCompletionResponse{
 		ID: chatID, Object: "chat.completion", Created: created, Model: model,
 		Choices: []Choice{{
@@ -313,6 +317,7 @@ func (s *Server) nonStreamChatCompletion(w http.ResponseWriter, r *http.Request,
 		}},
 		Usage: usage,
 	}
+	logDebug("response chat=%s rawContent=%q", chatID, rawContent)
 	writeJSON(w, http.StatusOK, resp)
 }
 
