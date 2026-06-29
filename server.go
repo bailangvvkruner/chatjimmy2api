@@ -193,51 +193,11 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	logDebug("upstream req model=%s msgs=%d sysprompt_len=%d", jimmyReq.ChatOptions.SelectedModel, len(jimmyReq.Messages), len(jimmyReq.ChatOptions.SystemPrompt))
 
-	// Retry loop: if upstream returns empty body, fallback to a smaller model
-	modelsToTry := []string{model, "llama3.1-8B"}
-	if model != "llama3.1-8B" {
-		modelsToTry = append(modelsToTry, "llama3.1-70B") // try other direction too
+	if req.Stream {
+		s.streamChatCompletion(w, r, jimmyReq, model, hasTools)
+	} else {
+		s.nonStreamChatCompletion(w, r, jimmyReq, model, hasTools)
 	}
-	// Deduplicate
-	seen := map[string]bool{}
-	var uniq []string
-	for _, m := range modelsToTry {
-		if !seen[m] {
-			seen[m] = true
-			uniq = append(uniq, m)
-		}
-	}
-	modelsToTry = uniq
-
-	for attempt, tryModel := range modelsToTry {
-		if attempt > 0 {
-			logDebug("retry attempt=%d with model=%s", attempt, tryModel)
-			jimmyReq = s.upstream.BuildJimmyRequestFromMessages(
-				withToolResultsFormatted(messages), tryModel,
-			)
-		}
-
-		if req.Stream {
-			retryNeeded := s.streamChatCompletion(w, r, jimmyReq, tryModel, hasTools)
-			if !retryNeeded {
-				return // success or non-retriable error
-			}
-			// Empty body — retry with next model
-			logDebug("stream empty body on model=%s, will retry", tryModel)
-		} else {
-			s.nonStreamChatCompletion(w, r, jimmyReq, tryModel, hasTools)
-			return // non-streaming already handles errors
-		}
-	}
-
-	// All retries exhausted
-	log.Printf("all upstream retries exhausted")
-	writeJSON(w, http.StatusBadGateway, APIError{
-		Error: APIErrorDetail{
-			Message: "Upstream returned empty response after retries",
-			Type:    "upstream_error",
-		},
-	})
 }
 
 // injectSystemMessage prepends or appends to an existing system message.
@@ -407,7 +367,7 @@ func sniffEmptyBody(sr *StreamReader) (*bytes.Buffer, error) {
 	return buf, nil
 }
 
-func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, jimmyReq *JimmyRequest, model string, hasTools bool) bool {
+func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, jimmyReq *JimmyRequest, model string, hasTools bool) {
 	logDebug("stream calling DoRequest model=%s msgs=%d", model, len(jimmyReq.Messages))
 	body, err := s.upstream.DoRequest(r.Context(), jimmyReq)
 	if err != nil {
@@ -418,7 +378,7 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 				Type:    "upstream_error",
 			},
 		})
-		return false
+		return
 	}
 	defer body.Close()
 
@@ -433,13 +393,22 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 				Type:    "upstream_error",
 			},
 		})
-		return false
+		return
 	}
 
-	// Empty body from upstream — signal retry
+	// Empty body from upstream
 	if peekBuf == nil {
-		logDebug("stream empty body from upstream model=%s, will retry", model)
-		return true
+		logDebug("stream empty body from upstream model=%s", model)
+		// Without content, send an empty [DONE] so AstrBot doesn't hang
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		flusher, _ := w.(http.Flusher)
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return
 	}
 
 	flusher, ok := w.(http.Flusher)
@@ -451,7 +420,7 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 				Type:    "server_error",
 			},
 		})
-		return false
+		return
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -539,7 +508,7 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 			flusher.Flush()
 
 			logDebug("stream done tool_call chat=%s n=%d elapsed=%v stats=%s", chatID, len(toolCalls), time.Since(streamStart), sr.StatsJSON())
-			return false
+			return
 		}
 		// Fallthrough: tool call parsing failed, treat as text
 		logDebug("stream tool_call peek not parsed, fallback to text chat=%s", chatID)
@@ -602,5 +571,4 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 	flusher.Flush()
 
 	logDebug("stream done text chat=%s total_bytes=%d elapsed=%v stats=%s", chatID, totalBytes, time.Since(streamStart), sr.StatsJSON())
-	return false
 }

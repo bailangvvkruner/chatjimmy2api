@@ -57,9 +57,10 @@ func findStats(data []byte) int {
 // ── Upstream client ──
 
 const (
-	// maxRequestBodySize is the approximate max request body size in bytes
-	// before we truncate messages. The upstream nginx limits client_max_body_size.
-	maxRequestBodySize = 384 * 1024 // 384KB safe limit
+	// maxRequestBodySize is the maximum upstream JSON body size in bytes.
+	// chatjimmy.ai returns HTTP 200 empty body when request exceeds ~48KB.
+	// We truncate messages aggressively to stay well under this limit.
+	maxRequestBodySize = 35 * 1024 // 35KB safe limit
 )
 
 type UpstreamClient struct {
@@ -110,7 +111,8 @@ func (c *UpstreamClient) BuildJimmyRequest(req *ChatCompletionRequest) *JimmyReq
 	// Truncate messages if the total body exceeds the upstream limit
 	maxSize := maxRequestBodySize
 	if maxSize > 0 {
-		truncated := truncateMessages(messages, maxSize, 2048) // 2KB overhead buffer
+		overhead := 512 + len(systemPrompt)
+		truncated := truncateMessages(messages, maxSize, overhead)
 		if len(truncated) < len(messages) {
 			messages = truncated
 		}
@@ -151,7 +153,8 @@ func (c *UpstreamClient) BuildJimmyRequestFromMessages(messages []ChatMessage, m
 	// Truncate messages if the total body exceeds the upstream limit
 	maxSize := maxRequestBodySize
 	if maxSize > 0 {
-		truncated := truncateMessages(chatMsgs, maxSize, 2048)
+		overhead := 512 + len(systemPrompt)
+		truncated := truncateMessages(chatMsgs, maxSize, overhead)
 		if len(truncated) < len(chatMsgs) {
 			chatMsgs = truncated
 		}
