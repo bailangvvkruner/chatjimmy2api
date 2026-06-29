@@ -58,9 +58,10 @@ func findStats(data []byte) int {
 
 const (
 	// maxRequestBodySize is the maximum upstream JSON body size in bytes.
-	// chatjimmy.ai returns HTTP 200 empty body when request exceeds ~48KB.
-	// We truncate messages aggressively to stay well under this limit.
-	maxRequestBodySize = 35 * 1024 // 35KB safe limit
+	// The upstream nginx has client_max_body_size ~1MB (1,048,576 bytes).
+	// Requests exceeding this return HTTP 413. We truncate at 768KB to stay
+	// well below the limit with room for system prompt and headers.
+	maxRequestBodySize = 768 * 1024 // 768KB (nginx limit is ~1MB)
 )
 
 type UpstreamClient struct {
