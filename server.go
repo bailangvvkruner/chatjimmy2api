@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -14,6 +15,12 @@ type Server struct {
 	apiKey   string
 	started  time.Time
 	models   []Model
+
+	lastUsageMu sync.Mutex
+	lastModel   string
+	lastPrompt  int
+	lastCompletion int
+	lastTotal   int
 }
 
 func NewServer(upstream *UpstreamClient, apiKey string, modelIDs []string) *Server {
@@ -97,12 +104,37 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // ── Handlers ──
 
+func (s *Server) storeLastUsage(model string, prompt, completion, total int) {
+	s.lastUsageMu.Lock()
+	s.lastModel = model
+	s.lastPrompt = prompt
+	s.lastCompletion = completion
+	s.lastTotal = total
+	s.lastUsageMu.Unlock()
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
+	s.lastUsageMu.Lock()
+	lm := s.lastModel
+	lp := s.lastPrompt
+	lc := s.lastCompletion
+	lt := s.lastTotal
+	s.lastUsageMu.Unlock()
+
+	resp := map[string]any{
 		"status":  "ok",
 		"uptime":  time.Since(s.started).String(),
 		"version": "0.1.0",
-	})
+	}
+	if lm != "" {
+		resp["last_usage"] = map[string]any{
+			"model":            lm,
+			"prompt_tokens":    lp,
+			"completion_tokens": lc,
+			"total_tokens":     lt,
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
@@ -299,6 +331,9 @@ func (s *Server) nonStreamChatCompletion(w http.ResponseWriter, r *http.Request,
 	}
 
 	logDebug("upstream raw: chat=%s len=%d has_stats=%v", chatID, len(rawContent), stats != nil)
+
+	// Record last usage for the / endpoint
+	s.storeLastUsage(model, usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
 
 	// Check for tool calls
 	if hasTools && HasToolCalls(rawContent) {
