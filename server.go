@@ -193,11 +193,51 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	logDebug("upstream req model=%s msgs=%d sysprompt_len=%d", jimmyReq.ChatOptions.SelectedModel, len(jimmyReq.Messages), len(jimmyReq.ChatOptions.SystemPrompt))
 
-	if req.Stream {
-		s.streamChatCompletion(w, r, jimmyReq, model, hasTools)
-	} else {
-		s.nonStreamChatCompletion(w, r, jimmyReq, model, hasTools)
+	// Retry loop: if upstream returns empty body, fallback to a smaller model
+	modelsToTry := []string{model, "llama3.1-8B"}
+	if model != "llama3.1-8B" {
+		modelsToTry = append(modelsToTry, "llama3.1-70B") // try other direction too
 	}
+	// Deduplicate
+	seen := map[string]bool{}
+	var uniq []string
+	for _, m := range modelsToTry {
+		if !seen[m] {
+			seen[m] = true
+			uniq = append(uniq, m)
+		}
+	}
+	modelsToTry = uniq
+
+	for attempt, tryModel := range modelsToTry {
+		if attempt > 0 {
+			logDebug("retry attempt=%d with model=%s", attempt, tryModel)
+			jimmyReq = s.upstream.BuildJimmyRequestFromMessages(
+				withToolResultsFormatted(messages), tryModel,
+			)
+		}
+
+		if req.Stream {
+			retryNeeded := s.streamChatCompletion(w, r, jimmyReq, tryModel, hasTools)
+			if !retryNeeded {
+				return // success or non-retriable error
+			}
+			// Empty body — retry with next model
+			logDebug("stream empty body on model=%s, will retry", tryModel)
+		} else {
+			s.nonStreamChatCompletion(w, r, jimmyReq, tryModel, hasTools)
+			return // non-streaming already handles errors
+		}
+	}
+
+	// All retries exhausted
+	log.Printf("all upstream retries exhausted")
+	writeJSON(w, http.StatusBadGateway, APIError{
+		Error: APIErrorDetail{
+			Message: "Upstream returned empty response after retries",
+			Type:    "upstream_error",
+		},
+	})
 }
 
 // injectSystemMessage prepends or appends to an existing system message.
@@ -345,8 +385,30 @@ func (s *Server) nonStreamChatCompletion(w http.ResponseWriter, r *http.Request,
 
 // ── Streaming handler (passthrough) ──
 
-func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, jimmyReq *JimmyRequest, model string, hasTools bool) {
-	logDebug("stream calling DoRequest chat model=%s msgs=%d", model, len(jimmyReq.Messages))
+// sniffEmptyBody reads the first chunk to detect completely empty upstream responses.
+// Returns a buffer with the peeked data, or nil if the body was empty (EOF immediately).
+// When stats-only (no text content), logs the stats and also returns nil (retryable).
+func sniffEmptyBody(sr *StreamReader) (*bytes.Buffer, error) {
+	chunk, done, err := sr.ReadChunk()
+	if err != nil {
+		return nil, err
+	}
+	if done && len(chunk) == 0 {
+		// Check if there are stats (upstream returned stats-only response)
+		if json := sr.StatsJSON(); json != "" {
+			log.Printf("[UPSTREAM STATS] %s", json)
+		}
+		return nil, nil // completely empty
+	}
+	buf := &bytes.Buffer{}
+	if chunk != nil {
+		buf.Write(chunk)
+	}
+	return buf, nil
+}
+
+func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, jimmyReq *JimmyRequest, model string, hasTools bool) bool {
+	logDebug("stream calling DoRequest model=%s msgs=%d", model, len(jimmyReq.Messages))
 	body, err := s.upstream.DoRequest(r.Context(), jimmyReq)
 	if err != nil {
 		logDebug("stream upstream err: %v", err)
@@ -356,9 +418,29 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 				Type:    "upstream_error",
 			},
 		})
-		return
+		return false
 	}
 	defer body.Close()
+
+	// ── Peek: check for empty body BEFORE sending SSE headers ──
+	sr := NewStreamReader(body)
+	peekBuf, err := sniffEmptyBody(sr)
+	if err != nil {
+		logDebug("stream peek error: %v", err)
+		writeJSON(w, http.StatusBadGateway, APIError{
+			Error: APIErrorDetail{
+				Message: fmt.Sprintf("Upstream read error: %v", err),
+				Type:    "upstream_error",
+			},
+		})
+		return false
+	}
+
+	// Empty body from upstream — signal retry
+	if peekBuf == nil {
+		logDebug("stream empty body from upstream model=%s, will retry", model)
+		return true
+	}
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -369,7 +451,7 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 				Type:    "server_error",
 			},
 		})
-		return
+		return false
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -381,32 +463,15 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 
 	chatID := generateID()
 	created := nowUnix()
-	sr := NewStreamReader(body)
 	streamStart := time.Now()
 	var totalBytes int64
 
 	logDebug("stream started chat=%s", chatID)
 
 	// ── Determine response type ──
-	// Peek at the first few bytes. If starts with <tool_call>, buffer all and
-	// emit as tool call deltas. Otherwise, true passthrough streaming.
 	isToolCall := false
-	var peekBuf bytes.Buffer
 
 	if hasTools {
-		for peekBuf.Len() < len(toolCallBegin) {
-			chunk, done, err := sr.ReadChunk()
-			if err != nil {
-				log.Printf("stream sniff error: %v", err)
-				break
-			}
-			if chunk != nil {
-				peekBuf.Write(chunk)
-			}
-			if done {
-				break
-			}
-		}
 		isToolCall = bytes.HasPrefix(peekBuf.Bytes(), []byte(toolCallBegin))
 	}
 
@@ -473,8 +538,8 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 			writeStatsSSE(w, streamStart, totalBytes)
 			flusher.Flush()
 
-			logDebug("stream done tool_call chat=%s n=%d elapsed=%v", chatID, len(toolCalls), time.Since(streamStart))
-			return
+			logDebug("stream done tool_call chat=%s n=%d elapsed=%v stats=%s", chatID, len(toolCalls), time.Since(streamStart), sr.StatsJSON())
+			return false
 		}
 		// Fallthrough: tool call parsing failed, treat as text
 		logDebug("stream tool_call peek not parsed, fallback to text chat=%s", chatID)
@@ -536,5 +601,6 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 	writeStatsSSE(w, streamStart, totalBytes)
 	flusher.Flush()
 
-	logDebug("stream done text chat=%s total_bytes=%d elapsed=%v", chatID, totalBytes, time.Since(streamStart))
+	logDebug("stream done text chat=%s total_bytes=%d elapsed=%v stats=%s", chatID, totalBytes, time.Since(streamStart), sr.StatsJSON())
+	return false
 }

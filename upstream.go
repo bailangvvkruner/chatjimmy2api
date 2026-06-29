@@ -202,6 +202,8 @@ func (c *UpstreamClient) DoRequest(ctx context.Context, jimmyReq *JimmyRequest) 
 		return nil, fmt.Errorf("upstream HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 
+	logDebug("upstream status=%d content-type=%q content-length=%s", resp.StatusCode, resp.Header.Get("Content-Type"), resp.Header.Get("Content-Length"))
+
 	return resp.Body, nil
 }
 
@@ -246,7 +248,7 @@ func (sr *StreamReader) ReadChunk() ([]byte, bool, error) {
 					chunk = make([]byte, idx)
 					copy(chunk, sr.remainder[:idx])
 				}
-				// Capture stats JSON
+				// Capture stats JSON (always, even when idx==0)
 				sr.captureStats(sr.remainder[idx:])
 				sr.done = true
 				return chunk, true, nil
@@ -298,6 +300,14 @@ func (sr *StreamReader) ExtractStats() *ChatStats {
 		return nil
 	}
 	return &stats
+}
+
+// StatsJSON returns the raw stats JSON string, or empty if none captured.
+func (sr *StreamReader) StatsJSON() string {
+	if len(sr.rawStats) == 0 {
+		return ""
+	}
+	return string(sr.rawStats)
 }
 
 func copyBuf(src []byte) []byte {
