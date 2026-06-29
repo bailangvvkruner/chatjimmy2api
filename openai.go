@@ -232,3 +232,39 @@ func generateToolCallID() string {
 func nowUnix() int64 {
 	return time.Now().Unix()
 }
+
+// writeStatsSSE outputs a stats line after [DONE] in streaming mode.
+// Format: "Generated in 1.234s • 5,678 tok/s"
+func writeStatsSSE(w io.Writer, start time.Time, totalBytes int64) {
+	elapsed := time.Since(start)
+	secs := elapsed.Seconds()
+	var tps int64
+	if secs > 0 {
+		tps = int64(float64(totalBytes) / secs / 4.0) // ~4 chars per token
+	}
+	var elapsedStr string
+	if secs >= 1.0 {
+		elapsedStr = fmt.Sprintf("%.2fs", secs)
+	} else {
+		elapsedStr = fmt.Sprintf("%dms", elapsed.Milliseconds())
+	}
+	line := fmt.Sprintf("Generated in %s • %s tok/s",
+		elapsedStr, formatInt(tps))
+	fmt.Fprintf(w, "data: %s\n\n", line)
+}
+
+func formatInt(n int64) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d", n)
+	}
+	s := fmt.Sprintf("%d", n)
+	var parts []string
+	for i := len(s); i > 0; i -= 3 {
+		start := i - 3
+		if start < 0 {
+			start = 0
+		}
+		parts = append([]string{s[start:i]}, parts...)
+	}
+	return strings.Join(parts, ",")
+}

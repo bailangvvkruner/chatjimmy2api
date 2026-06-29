@@ -343,6 +343,8 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 	chatID := generateID()
 	created := nowUnix()
 	sr := NewStreamReader(body)
+	streamStart := time.Now()
+	var totalBytes int64
 
 	// ── Determine response type ──
 	// Peek at the first few bytes. If starts with <tool_call>, buffer all and
@@ -387,6 +389,7 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 		}
 
 		rawContent := strings.TrimSpace(fullBuf.String())
+		totalBytes = int64(len(rawContent))
 		if parsed := FindToolCalls(rawContent); len(parsed) > 0 {
 			toolCalls := convertToolCalls(parsed)
 
@@ -424,6 +427,7 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 				Choices: []ChunkChoice{{Delta: Delta{}, FinishReason: &finish}},
 			})
 			fmt.Fprintf(w, "data: [DONE]\n\n")
+			writeStatsSSE(w, streamStart, totalBytes)
 			flusher.Flush()
 			return
 		}
@@ -456,6 +460,7 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 			break
 		}
 		if chunk != nil && len(chunk) > 0 {
+			totalBytes += int64(len(chunk))
 			writeSSE(w, ChatCompletionChunk{
 				ID: chatID, Object: "chat.completion.chunk", Created: created, Model: model,
 				Choices: []ChunkChoice{{Delta: Delta{Content: strPtr(string(chunk))}}},
@@ -474,5 +479,6 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 		Choices: []ChunkChoice{{Delta: Delta{}, FinishReason: &finish}},
 	})
 	fmt.Fprintf(w, "data: [DONE]\n\n")
+	writeStatsSSE(w, streamStart, totalBytes)
 	flusher.Flush()
 }
