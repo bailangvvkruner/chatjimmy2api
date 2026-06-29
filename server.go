@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -324,7 +323,7 @@ func (s *Server) nonStreamChatCompletion(w http.ResponseWriter, r *http.Request,
 	// Normal text response
 	finish := "stop"
 	if rawContent == "" {
-		log.Printf("[WARN] empty rawContent, chat=%s model=%s stats=%+v", chatID, model, stats)
+		logWarn("empty rawContent, chat=%s model=%s stats=%+v", chatID, model, stats)
 		rawContent = "..."
 	}
 	resp := ChatCompletionResponse{
@@ -356,7 +355,7 @@ func sniffEmptyBody(sr *StreamReader) (*bytes.Buffer, error) {
 	if done && len(chunk) == 0 {
 		// Check if there are stats (upstream returned stats-only response)
 		if json := sr.StatsJSON(); json != "" {
-			log.Printf("[UPSTREAM STATS] %s", json)
+			logInfo("upstream stats: %s", json)
 		}
 		return nil, nil // completely empty
 	}
@@ -454,7 +453,7 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 		for {
 			chunk, done, err := sr.ReadChunk()
 			if err != nil {
-				log.Printf("stream toolcall read error: %v", err)
+				logError("stream toolcall read error: %v", err)
 				break
 			}
 			if chunk != nil {
@@ -540,7 +539,7 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 	for {
 		chunk, done, err := sr.ReadChunk()
 		if err != nil {
-			log.Printf("stream read error: %v", err)
+			logError("stream read error: %v", err)
 			break
 		}
 		if chunk != nil && len(chunk) > 0 {

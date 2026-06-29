@@ -19,19 +19,51 @@ const (
 	defaultUpstream  = "https://chatjimmy.ai/api/chat"
 )
 
-var debugMode bool
+var logLevel int
+
+const (
+	levelError = iota // 0 - only errors
+	levelWarn         // 1 - errors + warnings
+	levelInfo         // 2 - + info (default)
+	levelDebug        // 3 - + debug
+)
 
 func init() {
-	debugMode = os.Getenv("LOG_LEVEL") == "debug"
+	switch strings.ToLower(os.Getenv("LOG_LEVEL")) {
+	case "error":
+		logLevel = levelError
+	case "warn", "warning":
+		logLevel = levelWarn
+	case "debug":
+		logLevel = levelDebug
+	default:
+		logLevel = levelInfo
+	}
 
 	// Capture all log output into the ring buffer (both stderr + buffer)
 	log.SetOutput(io.MultiWriter(os.Stderr, debugLog))
 }
 
 func logDebug(format string, args ...any) {
-	if debugMode {
+	if logLevel >= levelDebug {
 		log.Printf("[DEBUG] "+format, args...)
 	}
+}
+
+func logInfo(format string, args ...any) {
+	if logLevel >= levelInfo {
+		log.Printf("[INFO] "+format, args...)
+	}
+}
+
+func logWarn(format string, args ...any) {
+	if logLevel >= levelWarn {
+		log.Printf("[WARN] "+format, args...)
+	}
+}
+
+func logError(format string, args ...any) {
+	log.Printf("[ERROR] "+format, args...)
 }
 
 func getEnv(key, fallback string) string {
