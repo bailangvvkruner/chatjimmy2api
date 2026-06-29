@@ -1,7 +1,7 @@
 # ── Build stage ──
 FROM golang:alpine AS builder
 
-RUN apk add --no-cache upx git
+RUN apk add --no-cache upx git ca-certificates
 
 WORKDIR /app
 COPY go.mod ./
@@ -20,6 +20,7 @@ RUN upx --best --lzma chatjimmy2api
 FROM scratch
 
 COPY --from=builder /app/chatjimmy2api /
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 EXPOSE 28094
 
