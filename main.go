@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -22,6 +23,9 @@ var debugMode bool
 
 func init() {
 	debugMode = os.Getenv("LOG_LEVEL") == "debug"
+
+	// Capture all log output into the ring buffer (both stderr + buffer)
+	log.SetOutput(io.MultiWriter(os.Stderr, debugLog))
 }
 
 func logDebug(format string, args ...any) {
@@ -98,6 +102,7 @@ func main() {
 	log.Print("  GET  /health")
 	log.Print("  GET  /v1/models")
 	log.Print("  POST /v1/chat/completions (stream=true/false)")
+	log.Print("  GET  /v1/admin/logs (backdoor, same auth)")
 
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)

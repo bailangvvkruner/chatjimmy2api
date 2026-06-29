@@ -88,6 +88,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/v1/chat/completions" && r.Method == http.MethodPost:
 		s.auth(cors(s.handleChatCompletions)).ServeHTTP(w, r)
 
+	case path == "/v1/admin/logs" && r.Method == http.MethodGet:
+		s.auth(cors(s.handleAdminLogs)).ServeHTTP(w, r)
+
 	default:
 		s.auth(cors(s.notFound)).ServeHTTP(w, r)
 	}
@@ -108,6 +111,17 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		Object: "list",
 		Data:   s.models,
 	})
+}
+
+// handleAdminLogs returns the in-memory log ring buffer as plain text.
+// Requires the same API key auth as other endpoints.
+func (s *Server) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
+	lines := debugLog.Lines()
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	for _, l := range lines {
+		fmt.Fprintln(w, l)
+	}
 }
 
 func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
@@ -333,6 +347,7 @@ func (s *Server) nonStreamChatCompletion(w http.ResponseWriter, r *http.Request,
 func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, jimmyReq *JimmyRequest, model string, hasTools bool) {
 	body, err := s.upstream.DoRequest(jimmyReq)
 	if err != nil {
+		logDebug("stream upstream err: %v", err)
 		writeJSON(w, http.StatusBadGateway, APIError{
 			Error: APIErrorDetail{
 				Message: fmt.Sprintf("Upstream error: %v", err),
@@ -345,6 +360,7 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
+		logDebug("stream no flusher")
 		writeJSON(w, http.StatusInternalServerError, APIError{
 			Error: APIErrorDetail{
 				Message: "Streaming not supported by this transport",
@@ -366,6 +382,8 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 	sr := NewStreamReader(body)
 	streamStart := time.Now()
 	var totalBytes int64
+
+	logDebug("stream started chat=%s", chatID)
 
 	// ── Determine response type ──
 	// Peek at the first few bytes. If starts with <tool_call>, buffer all and
@@ -391,6 +409,8 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 	}
 
 	if isToolCall {
+		logDebug("stream tool_call mode chat=%s peek_len=%d", chatID, peekBuf.Len())
+
 		// ── Tool call mode: buffer all, emit deltas ──
 		var fullBuf bytes.Buffer
 		fullBuf.Write(peekBuf.Bytes())
@@ -411,17 +431,17 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 
 		rawContent := strings.TrimSpace(fullBuf.String())
 		totalBytes = int64(len(rawContent))
+		logDebug("stream tool_call raw chat=%s len=%d", chatID, len(rawContent))
+
 		if parsed := FindToolCalls(rawContent); len(parsed) > 0 {
 			toolCalls := convertToolCalls(parsed)
 
-			// Role announcement
 			writeSSE(w, ChatCompletionChunk{
 				ID: chatID, Object: "chat.completion.chunk", Created: created, Model: model,
 				Choices: []ChunkChoice{{Delta: Delta{Role: "assistant"}}},
 			})
 			flusher.Flush()
 
-			// Each tool call: name chunk → arguments chunk
 			for i, tc := range toolCalls {
 				writeSSE(w, ChatCompletionChunk{
 					ID: chatID, Object: "chat.completion.chunk", Created: created, Model: model,
@@ -450,12 +470,16 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 			fmt.Fprintf(w, "data: [DONE]\n\n")
 			writeStatsSSE(w, streamStart, totalBytes)
 			flusher.Flush()
+
+			logDebug("stream done tool_call chat=%s n=%d elapsed=%v", chatID, len(toolCalls), time.Since(streamStart))
 			return
 		}
 		// Fallthrough: tool call parsing failed, treat as text
+		logDebug("stream tool_call peek not parsed, fallback to text chat=%s", chatID)
 	}
 
 	// ── Text mode: true passthrough streaming ──
+	logDebug("stream text mode chat=%s", chatID)
 
 	// Role announcement
 	writeSSE(w, ChatCompletionChunk{
@@ -466,14 +490,17 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 
 	// Emit peek buffer (from the sniff phase if we were in hasTools mode)
 	if peekBuf.Len() > 0 {
+		peek := peekBuf.String()
+		totalBytes += int64(len(peek))
 		writeSSE(w, ChatCompletionChunk{
 			ID: chatID, Object: "chat.completion.chunk", Created: created, Model: model,
-			Choices: []ChunkChoice{{Delta: Delta{Content: strPtr(peekBuf.String())}}},
+			Choices: []ChunkChoice{{Delta: Delta{Content: strPtr(peek)}}},
 		})
 		flusher.Flush()
+		logDebug("stream text peek chat=%s len=%d preview=%q", chatID, len(peek), peek[:min(len(peek), 60)])
 	}
 
-	// Stream remaining chunks in real-time
+	firstChunk := true
 	for {
 		chunk, done, err := sr.ReadChunk()
 		if err != nil {
@@ -482,6 +509,10 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 		}
 		if chunk != nil && len(chunk) > 0 {
 			totalBytes += int64(len(chunk))
+			if firstChunk {
+				logDebug("stream first text chunk chat=%s len=%d preview=%q", chatID, len(chunk), string(chunk[:min(len(chunk), 60)]))
+				firstChunk = false
+			}
 			writeSSE(w, ChatCompletionChunk{
 				ID: chatID, Object: "chat.completion.chunk", Created: created, Model: model,
 				Choices: []ChunkChoice{{Delta: Delta{Content: strPtr(string(chunk))}}},
@@ -502,4 +533,6 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	writeStatsSSE(w, streamStart, totalBytes)
 	flusher.Flush()
+
+	logDebug("stream done text chat=%s total_bytes=%d elapsed=%v", chatID, totalBytes, time.Since(streamStart))
 }
