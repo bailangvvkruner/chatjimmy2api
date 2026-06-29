@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -173,13 +174,13 @@ func (c *UpstreamClient) BuildJimmyRequestFromMessages(messages []ChatMessage, m
 
 // DoRequest sends a request to the chatjimmy.ai API and returns the response body stream.
 // The caller must close the returned io.ReadCloser.
-func (c *UpstreamClient) DoRequest(jimmyReq *JimmyRequest) (io.ReadCloser, error) {
+func (c *UpstreamClient) DoRequest(ctx context.Context, jimmyReq *JimmyRequest) (io.ReadCloser, error) {
 	body, err := json.Marshal(jimmyReq)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", c.baseURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}

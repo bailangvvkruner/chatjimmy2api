@@ -248,7 +248,8 @@ func withToolResultsFormatted(msgs []ChatMessage) []ChatMessage {
 // ── Non-streaming handler ──
 
 func (s *Server) nonStreamChatCompletion(w http.ResponseWriter, r *http.Request, jimmyReq *JimmyRequest, model string, hasTools bool) {
-	body, err := s.upstream.DoRequest(jimmyReq)
+	logDebug("nonstream calling DoRequest model=%s msgs=%d", model, len(jimmyReq.Messages))
+	body, err := s.upstream.DoRequest(r.Context(), jimmyReq)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, APIError{
 			Error: APIErrorDetail{
@@ -345,7 +346,8 @@ func (s *Server) nonStreamChatCompletion(w http.ResponseWriter, r *http.Request,
 // ── Streaming handler (passthrough) ──
 
 func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, jimmyReq *JimmyRequest, model string, hasTools bool) {
-	body, err := s.upstream.DoRequest(jimmyReq)
+	logDebug("stream calling DoRequest chat model=%s msgs=%d", model, len(jimmyReq.Messages))
+	body, err := s.upstream.DoRequest(r.Context(), jimmyReq)
 	if err != nil {
 		logDebug("stream upstream err: %v", err)
 		writeJSON(w, http.StatusBadGateway, APIError{
