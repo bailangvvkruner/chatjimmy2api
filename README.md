@@ -18,14 +18,6 @@ OpenAI 兼容 API 代理，将 [chatjimmy.ai](https://chatjimmy.ai) 的 API 转�
 docker run -d \
   --name chatjimmy2api \
   -p 28094:28094 \
-  -e API_KEY=your-api-key \
-  bailangvvking/chatjimmy2api
-```
-
-```bash
-docker run -d \
-  --name chatjimmy2api \
-  --network host \
   -e PORT=28094 \
   -e API_KEY=your-api-key \
   bailangvvking/chatjimmy2api
