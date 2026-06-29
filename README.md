@@ -22,6 +22,15 @@ docker run -d \
   bailangvvking/chatjimmy2api
 ```
 
+```bash
+docker run -d \
+  --name chatjimmy2api \
+  --network host \
+  -e PORT=28094 \
+  -e API_KEY=your-api-key \
+  bailangvvking/chatjimmy2api
+```
+
 ## 环境变量
 
 | 变量 | 默认值 | 说明 |
