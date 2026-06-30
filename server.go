@@ -300,7 +300,6 @@ func withToolResultsFormatted(msgs []ChatMessage) []ChatMessage {
 
 func (s *Server) nonStreamChatCompletion(w http.ResponseWriter, r *http.Request, jimmyReq *JimmyRequest, model string, hasTools bool) {
 	logDebug("nonstream calling DoRequest model=%s msgs=%d", model, len(jimmyReq.Messages))
-	start := time.Now()
 	body, err := s.upstream.DoRequest(r.Context(), jimmyReq)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, APIError{
@@ -385,8 +384,8 @@ func (s *Server) nonStreamChatCompletion(w http.ResponseWriter, r *http.Request,
 		logWarn("empty rawContent, chat=%s model=%s stats=%+v", chatID, model, stats)
 		rawContent = "..."
 	}
-	// Append stats to the visible content
-	statsText := formatStats(start, int64(len(rawContent)))
+	// Append stats from upstream to the visible content
+	statsText := formatUpstreamStats(stats)
 	if statsText != "" {
 		rawContent += "\n\n" + statsText
 	}
@@ -430,25 +429,26 @@ func sniffEmptyBody(sr *StreamReader) (*bytes.Buffer, error) {
 	return buf, nil
 }
 
-// formatStats generates a human-readable stats string like "Generated in 1234ms • 456 tok/s".
-func formatStats(start time.Time, totalBytes int64) string {
-	elapsed := time.Since(start)
-	secs := elapsed.Seconds()
-	if secs <= 0 {
-		secs = 0.000001
+// formatUpstreamStats generates a human-readable stats string from upstream <|stats|> data.
+func formatUpstreamStats(stats *ChatStats) string {
+	if stats == nil || stats.TotalTime <= 0 {
+		return ""
 	}
+	secs := stats.TotalTime
 	var timeStr string
-	if us := elapsed.Microseconds(); us < 1000 {
-		timeStr = fmt.Sprintf("%dµs", us)
+	ms := int64(secs * 1000)
+	if ms < 1 {
+		timeStr = fmt.Sprintf("%dµs", int64(secs*1_000_000))
 	} else {
-		timeStr = fmt.Sprintf("%dms", elapsed.Milliseconds())
+		timeStr = fmt.Sprintf("%dms", ms)
 	}
-	tps := int64(float64(totalBytes) / secs / 4.0)
+	tps := int64(stats.DecodeRate)
 	return fmt.Sprintf("Generated in %s • %s tok/s", timeStr, formatInt(tps))
 }
 
 func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, jimmyReq *JimmyRequest, model string, hasTools bool) {
 	logDebug("stream calling DoRequest model=%s msgs=%d", model, len(jimmyReq.Messages))
+	streamStart := time.Now()
 	body, err := s.upstream.DoRequest(r.Context(), jimmyReq)
 	if err != nil {
 		logDebug("stream upstream err: %v", err)
@@ -512,7 +512,6 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 
 	chatID := generateID()
 	created := nowUnix()
-	streamStart := time.Now()
 	var totalBytes int64
 
 	logDebug("stream started chat=%s", chatID)
@@ -644,8 +643,9 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 		}
 	}
 
-	// Append stats to the very last content chunk
-	statsText := formatStats(streamStart, totalBytes)
+	// Append stats from upstream to the very last content chunk
+	upstreamStats := sr.ExtractStats()
+	statsText := formatUpstreamStats(upstreamStats)
 	if statsText != "" {
 		lastChunkContent += "\n\n" + statsText
 	}
