@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const version = "0.2.0"
+
 type Server struct {
 	upstream *UpstreamClient
 	apiKey   string
@@ -136,7 +138,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{
 		"status":  "ok",
 		"uptime":  time.Since(s.started).String(),
-		"version": "0.1.0",
+		"version": version,
 		"total_requests": tr,
 		"total_tokens": map[string]int64{
 			"prompt":    tp,
