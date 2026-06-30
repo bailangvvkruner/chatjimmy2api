@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const version = "0.2.0"
+const version = "0.2.1"
 
 type Server struct {
 	upstream *UpstreamClient
@@ -434,14 +434,15 @@ func sniffEmptyBody(sr *StreamReader) (*bytes.Buffer, error) {
 func formatStats(start time.Time, totalBytes int64) string {
 	elapsed := time.Since(start)
 	secs := elapsed.Seconds()
-	if secs < 0.001 {
-		return ""
+	if secs <= 0 {
+		secs = 0.000001
 	}
-	var tps int64
-	if secs > 0 {
-		tps = int64(float64(totalBytes) / secs / 4.0)
+	ms := elapsed.Milliseconds()
+	if ms < 1 {
+		ms = 1
 	}
-	return fmt.Sprintf("Generated in %dms • %s tok/s", elapsed.Milliseconds(), formatInt(tps))
+	tps := int64(float64(totalBytes) / secs / 4.0)
+	return fmt.Sprintf("Generated in %dms • %s tok/s", ms, formatInt(tps))
 }
 
 func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, jimmyReq *JimmyRequest, model string, hasTools bool) {
