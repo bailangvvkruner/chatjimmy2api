@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const version = "0.2.1"
+const version = "0.2.2"
 
 type Server struct {
 	upstream *UpstreamClient
@@ -437,12 +437,14 @@ func formatStats(start time.Time, totalBytes int64) string {
 	if secs <= 0 {
 		secs = 0.000001
 	}
-	ms := elapsed.Milliseconds()
-	if ms < 1 {
-		ms = 1
+	var timeStr string
+	if us := elapsed.Microseconds(); us < 1000 {
+		timeStr = fmt.Sprintf("%dµs", us)
+	} else {
+		timeStr = fmt.Sprintf("%dms", elapsed.Milliseconds())
 	}
 	tps := int64(float64(totalBytes) / secs / 4.0)
-	return fmt.Sprintf("Generated in %dms • %s tok/s", ms, formatInt(tps))
+	return fmt.Sprintf("Generated in %s • %s tok/s", timeStr, formatInt(tps))
 }
 
 func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, jimmyReq *JimmyRequest, model string, hasTools bool) {
