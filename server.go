@@ -428,7 +428,7 @@ func sniffEmptyBody(sr *StreamReader) (*bytes.Buffer, error) {
 	return buf, nil
 }
 
-// formatStats generates a human-readable stats string like "Generated in 1.23s • 456 tok/s".
+// formatStats generates a human-readable stats string like "Generated in 1234ms • 456 tok/s".
 func formatStats(start time.Time, totalBytes int64) string {
 	elapsed := time.Since(start)
 	secs := elapsed.Seconds()
@@ -439,13 +439,7 @@ func formatStats(start time.Time, totalBytes int64) string {
 	if secs > 0 {
 		tps = int64(float64(totalBytes) / secs / 4.0)
 	}
-	var elapsedStr string
-	if secs >= 1.0 {
-		elapsedStr = fmt.Sprintf("%.2fs", secs)
-	} else {
-		elapsedStr = fmt.Sprintf("%dms", elapsed.Milliseconds())
-	}
-	return fmt.Sprintf("Generated in %s • %s tok/s", elapsedStr, formatInt(tps))
+	return fmt.Sprintf("Generated in %dms • %s tok/s", elapsed.Milliseconds(), formatInt(tps))
 }
 
 func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, jimmyReq *JimmyRequest, model string, hasTools bool) {
@@ -585,7 +579,6 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 				Choices: []ChunkChoice{{Delta: Delta{}, FinishReason: &finish}},
 			})
 			fmt.Fprintf(w, "data: [DONE]\n\n")
-			writeStatsSSE(w, streamStart, totalBytes)
 			flusher.Flush()
 
 			logDebug("stream done tool_call chat=%s n=%d elapsed=%v stats=%s", chatID, len(toolCalls), time.Since(streamStart), sr.StatsJSON())
@@ -617,6 +610,7 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 		logDebug("stream text peek chat=%s len=%d preview=%q", chatID, len(peek), peek[:min(len(peek), 60)])
 	}
 
+	var lastChunkContent string
 	firstChunk := true
 	for {
 		chunk, done, err := sr.ReadChunk()
@@ -624,7 +618,14 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 			logError("stream read error: %v", err)
 			break
 		}
-		if chunk != nil && len(chunk) > 0 {
+		if done {
+			if chunk != nil && len(chunk) > 0 {
+				totalBytes += int64(len(chunk))
+				lastChunkContent = string(chunk)
+			}
+			break
+		}
+		if len(chunk) > 0 {
 			totalBytes += int64(len(chunk))
 			if firstChunk {
 				logDebug("stream first text chunk chat=%s len=%d preview=%q", chatID, len(chunk), string(chunk[:min(len(chunk), 60)]))
@@ -636,17 +637,17 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 			})
 			flusher.Flush()
 		}
-		if done {
-			break
-		}
 	}
 
-	// Finish: append stats as final content chunk
+	// Append stats to the very last content chunk
 	statsText := formatStats(streamStart, totalBytes)
 	if statsText != "" {
+		lastChunkContent += "\n\n" + statsText
+	}
+	if lastChunkContent != "" {
 		writeSSE(w, ChatCompletionChunk{
 			ID: chatID, Object: "chat.completion.chunk", Created: created, Model: model,
-			Choices: []ChunkChoice{{Delta: Delta{Content: strPtr("\n\n" + statsText)}}},
+			Choices: []ChunkChoice{{Delta: Delta{Content: strPtr(lastChunkContent)}}},
 		})
 		flusher.Flush()
 	}
