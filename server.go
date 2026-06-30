@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const version = "0.2.2"
+const version = "0.2.3"
 
 type Server struct {
 	upstream *UpstreamClient
@@ -479,10 +479,17 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 	// Empty body from upstream
 	if peekBuf == nil {
 		logDebug("stream empty body from upstream model=%s", model)
-		// Without content, send an empty [DONE] so AstrBot doesn't hang
+		// Send proper SSE stream: finish_reason then [DONE]
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.WriteHeader(http.StatusOK)
+		chatID := generateID()
+		created := nowUnix()
+		finish := "stop"
+		writeSSE(w, ChatCompletionChunk{
+			ID: chatID, Object: "chat.completion.chunk", Created: created, Model: model,
+			Choices: []ChunkChoice{{Delta: Delta{}, FinishReason: &finish}},
+		})
 		fmt.Fprintf(w, "data: [DONE]\n\n")
 		flusher, _ := w.(http.Flusher)
 		if flusher != nil {
