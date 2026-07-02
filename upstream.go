@@ -68,6 +68,7 @@ type UpstreamClient struct {
 	baseURL    string
 	httpClient *http.Client
 	bufPool    sync.Pool
+	limiter    *ContextLimiter
 }
 
 func NewUpstreamClient(baseURL string) *UpstreamClient {
@@ -90,7 +91,13 @@ func NewUpstreamClient(baseURL string) *UpstreamClient {
 				return &buf
 			},
 		},
+		limiter: NewContextLimiter(),
 	}
+}
+
+// Limiter returns the context limiter used for token tracking and truncation.
+func (c *UpstreamClient) Limiter() *ContextLimiter {
+	return c.limiter
 }
 
 // BuildJimmyRequest converts an OpenAI-format request into a chatjimmy.ai request.
@@ -163,14 +170,21 @@ func (c *UpstreamClient) BuildJimmyRequestFromMessages(messages []ChatMessage, m
 		}
 	}
 
-	// Truncate messages if the total body exceeds the upstream limit
+	// Phase 1: Truncate by token limit (model context window)
+	truncated, _ := c.limiter.TruncateByTokens(chatMsgs, model)
+	if len(truncated) < len(chatMsgs) {
+		logDebug("ctxlimiter truncated msgs=%d→%d model=%s", len(chatMsgs), len(truncated), model)
+		chatMsgs = truncated
+	}
+
+	// Phase 2: Truncate by body size (nginx limit ~1MB, we use 768KB)
 	maxSize := maxRequestBodySize
 	if maxSize > 0 {
 		overhead := 512 + len(systemPrompt)
 		estimate := estimateBodySize(chatMsgs)
 		truncated := truncateMessages(chatMsgs, maxSize, overhead)
 		if len(truncated) < len(chatMsgs) {
-			logDebug("truncated msgs=%d→%d estimate=%d overhead=%d max=%d", len(chatMsgs), len(truncated), estimate, overhead, maxSize)
+			logDebug("body truncation msgs=%d→%d estimate=%d overhead=%d max=%d", len(chatMsgs), len(truncated), estimate, overhead, maxSize)
 			chatMsgs = truncated
 		}
 	}

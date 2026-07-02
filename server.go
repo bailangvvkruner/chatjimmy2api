@@ -347,6 +347,8 @@ func (s *Server) nonStreamChatCompletion(w http.ResponseWriter, r *http.Request,
 		usage.CompletionTokens = stats.DecodeTokens
 		usage.PromptTokens = stats.TotalTokens - stats.DecodeTokens
 		usage.TotalTokens = stats.TotalTokens
+		// Feed stats back to the context limiter for adaptive limit tracking
+		s.upstream.Limiter().RecordPrefill(model, usage.PromptTokens, usage.TotalTokens)
 	}
 
 	logDebug("upstream raw: chat=%s len=%d has_stats=%v", chatID, len(rawContent), stats != nil)
@@ -653,6 +655,10 @@ func (s *Server) streamChatCompletion(w http.ResponseWriter, r *http.Request, ji
 	// Append stats from upstream to the very last content chunk
 	upstreamStats := sr.ExtractStats()
 	statsText := formatUpstreamStats(upstreamStats)
+	if upstreamStats != nil {
+		promptTokens := upstreamStats.TotalTokens - upstreamStats.DecodeTokens
+		s.upstream.Limiter().RecordPrefill(model, promptTokens, upstreamStats.TotalTokens)
+	}
 	if statsText != "" {
 		lastChunkContent += "\n\n" + statsText
 	}
